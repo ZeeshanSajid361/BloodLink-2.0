@@ -1,0 +1,112 @@
+/**
+ * Organization schema.
+ *
+ * Covers both hospitals and partner organisations (university societies,
+ * PRCS chapters, blood banks). The `type` field distinguishes them.
+ * All registrations start with status 'pending' and are activated only
+ * after admin review (Phase 5).
+ *
+ * The `apiKeyHash` field supports the forward-looking hospital inventory
+ * sync endpoint (Phase 4). It is populated when an admin approves a hospital
+ * registration and issues an API key.
+ */
+
+'use strict';
+
+const mongoose = require('mongoose');
+
+const ORG_TYPES = ['hospital', 'partner'];
+const ORG_STATUS = ['pending', 'approved', 'rejected'];
+
+const organizationSchema = new mongoose.Schema(
+  {
+    // The admin user account linked to this organisation.
+    owner: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+
+    name: {
+      type: String,
+      required: [true, 'Organisation name is required'],
+      trim: true,
+    },
+
+    type: {
+      type: String,
+      enum: { values: ORG_TYPES, message: 'Type must be hospital or partner' },
+      required: true,
+    },
+
+    status: {
+      type: String,
+      enum: { values: ORG_STATUS, message: 'Invalid status value' },
+      default: 'pending',
+    },
+
+    // Physical location — used for proximity-based donor matching in Phase 6.
+    address: {
+      street: String,
+      city: { type: String, required: [true, 'City is required'] },
+      province: String,
+    },
+
+    // Coordinates cached from Nominatim (Phase 6); null until first geocode lookup.
+    location: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point',
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        default: undefined,
+      },
+    },
+
+    phone: {
+      type: String,
+      trim: true,
+    },
+
+    email: {
+      type: String,
+      lowercase: true,
+      trim: true,
+    },
+
+    // Hashed API key for inventory sync — raw key is shown once and never stored.
+    apiKeyHash: {
+      type: String,
+      select: false,
+    },
+
+    // Admin notes on approval / rejection.
+    adminNote: {
+      type: String,
+      trim: true,
+    },
+
+    rejectedAt: Date,
+    approvedAt: Date,
+  },
+  {
+    timestamps: true,
+    toJSON: {
+      transform(_doc, ret) {
+        delete ret.apiKeyHash;
+        delete ret.__v;
+        return ret;
+      },
+    },
+  }
+);
+
+// Geospatial index for proximity queries (Phase 6).
+organizationSchema.index({ location: '2dsphere' }, { sparse: true });
+organizationSchema.index({ status: 1, type: 1 });
+
+const Organization = mongoose.model('Organization', organizationSchema);
+
+module.exports = { Organization, ORG_TYPES, ORG_STATUS };

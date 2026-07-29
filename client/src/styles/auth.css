@@ -1,0 +1,274 @@
+/*
+ * Auth layout — split-screen on desktop, stacked on mobile.
+ * Left panel: branding with animated blood-drop motif.
+ * Right panel: the form card.
+ */
+
+.auth-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 100dvh;
+}
+
+/* ── Left panel ──────────────────────────────────────────────────────────── */
+.auth-brand {
+  position: relative;
+  background: linear-gradient(145deg, #0e0508 0%, #1a050a 40%, #0d0d1a 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-12);
+  overflow: hidden;
+}
+
+/* Ambient glow blobs */
+.auth-brand::before {
+  content: '';
+  position: absolute;
+  top: -80px;
+  left: -80px;
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, rgba(192,57,43,0.25) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.auth-brand::after {
+  content: '';
+  position: absolute;
+  bottom: -60px;
+  right: -60px;
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, rgba(21,101,192,0.2) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.brand-logo-wrap {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  margin-bottom: var(--space-8);
+}
+
+/* Animated pulse ring around the drop icon */
+@keyframes pulseRing {
+  0%   { transform: scale(1);   opacity: 0.6; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+.brand-icon {
+  width: 80px;
+  height: 80px;
+  background: linear-gradient(135deg, var(--red-600), var(--red-800));
+  border-radius: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto var(--space-5);
+  font-size: 2.25rem;
+  box-shadow: var(--shadow-red), var(--shadow-md);
+  position: relative;
+}
+
+.brand-icon::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 28px;
+  background: linear-gradient(135deg, var(--red-500), var(--red-700));
+  opacity: 0.4;
+  animation: pulseRing 2.2s ease-out infinite;
+}
+
+.brand-wordmark {
+  font-size: 2.25rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  background: linear-gradient(135deg, #fff 30%, var(--red-300) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.brand-tagline {
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  margin-top: var(--space-2);
+  text-align: center;
+  max-width: 280px;
+  line-height: 1.5;
+}
+
+/* Stats row */
+.brand-stats {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: var(--space-8);
+  margin-top: var(--space-10);
+}
+
+.brand-stat {
+  text-align: center;
+}
+
+.brand-stat-value {
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: var(--red-400);
+  letter-spacing: -0.04em;
+  display: block;
+}
+
+.brand-stat-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+
+/* Testimonial quote */
+.brand-quote {
+  position: relative;
+  z-index: 1;
+  margin-top: var(--space-10);
+  padding: var(--space-5) var(--space-6);
+  background: rgba(255, 255, 255, 0.04);
+  border-left: 3px solid var(--red-600);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  max-width: 340px;
+}
+
+.brand-quote p {
+  font-size: 0.9375rem;
+  color: var(--text-secondary);
+  font-style: italic;
+  line-height: 1.6;
+}
+
+.brand-quote cite {
+  display: block;
+  margin-top: var(--space-3);
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  font-style: normal;
+  font-weight: 500;
+}
+
+/* ── Right panel ─────────────────────────────────────────────────────────── */
+.auth-form-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-6);
+  background: var(--surface-base);
+  overflow-y: auto;
+}
+
+.auth-form-card {
+  width: 100%;
+  max-width: 440px;
+  animation: fadeUp 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.auth-form-header {
+  margin-bottom: var(--space-8);
+}
+
+.auth-form-header h1 {
+  font-size: 1.875rem;
+  font-weight: 800;
+}
+
+.auth-form-header p {
+  color: var(--text-secondary);
+  margin-top: var(--space-2);
+  font-size: 0.9375rem;
+}
+
+.auth-form-footer {
+  text-align: center;
+  margin-top: var(--space-6);
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.auth-form-footer a {
+  color: var(--red-400);
+  font-weight: 500;
+  transition: color var(--transition-fast);
+}
+
+.auth-form-footer a:hover { color: var(--red-300); }
+
+/* ── Role selector ───────────────────────────────────────────────────────── */
+.role-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.role-card {
+  padding: var(--space-4);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-float);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.role-card:hover {
+  border-color: rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.05);
+}
+
+.role-card.selected {
+  border-color: var(--red-600);
+  background: rgba(192, 57, 43, 0.1);
+}
+
+.role-card-icon {
+  font-size: 1.5rem;
+}
+
+.role-card-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.role-card.selected .role-card-label { color: var(--red-300); }
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .auth-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-brand {
+    padding: var(--space-10) var(--space-6);
+    min-height: 280px;
+  }
+
+  .brand-stats { gap: var(--space-6); }
+
+  .brand-quote { display: none; }
+}
+
+@media (max-width: 480px) {
+  .auth-form-panel { padding: var(--space-6) var(--space-4); }
+  .auth-form-header h1 { font-size: 1.5rem; }
+}
