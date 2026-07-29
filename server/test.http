@@ -145,6 +145,83 @@ Authorization: Bearer {{token}}
 
 ###
 
+### ─────────────────────────────────────────────────────────────
+###  SEEKER MODULE  (set @seekerToken after seeker login)
+### ─────────────────────────────────────────────────────────────
+
+@seekerToken = PASTE_SEEKER_ACCESS_TOKEN_HERE
+
+### [SEEKER-01] Search compatible donors — O+ patient, all cities (public endpoint)
+GET {{baseUrl}}/api/seekers/search?patientBloodGroup=O%2B
+
+###
+
+### [SEEKER-02] Search compatible donors — AB+ patient, Islamabad
+GET {{baseUrl}}/api/seekers/search?patientBloodGroup=AB%2B&city=Islamabad
+
+###
+
+### [SEEKER-03] Compatibility info for a blood group
+GET {{baseUrl}}/api/seekers/compatibility?bloodGroup=B%2B
+
+###
+
+### [SEEKER-04] Submit blood request (multipart — use a REST client that supports files)
+# In VS Code REST Client, file uploads require the multipart/form-data syntax below.
+# Replace the file path with a real image path on your machine.
+POST {{baseUrl}}/api/seekers/requests
+Authorization: Bearer {{seekerToken}}
+Content-Type: multipart/form-data; boundary=BloodLinkBoundary
+
+--BloodLinkBoundary
+Content-Disposition: form-data; name="patientBloodGroup"
+
+O+
+--BloodLinkBoundary
+Content-Disposition: form-data; name="hospitalName"
+
+PIMS Hospital
+--BloodLinkBoundary
+Content-Disposition: form-data; name="hospitalCity"
+
+Islamabad
+--BloodLinkBoundary
+Content-Disposition: form-data; name="unitsNeeded"
+
+2
+--BloodLinkBoundary
+Content-Disposition: form-data; name="urgency"
+
+urgent
+--BloodLinkBoundary
+Content-Disposition: form-data; name="patientName"
+
+Ahmed Khan
+--BloodLinkBoundary
+Content-Disposition: form-data; name="document"; filename="slip.jpg"
+Content-Type: image/jpeg
+
+< ./test-files/sample-slip.jpg
+--BloodLinkBoundary--
+
+###
+
+### [SEEKER-05] Get own requests
+GET {{baseUrl}}/api/seekers/requests/mine
+Authorization: Bearer {{seekerToken}}
+
+###
+
+### [SEEKER-06] Cancel a pending request (replace REQUEST_ID)
+DELETE {{baseUrl}}/api/seekers/requests/REQUEST_ID_HERE
+Authorization: Bearer {{seekerToken}}
+
+###
+
+### ─────────────────────────────────────────────────────────────
+###  HEALTH
+### ─────────────────────────────────────────────────────────────
+
 ### [HEALTH] API health check
 GET {{baseUrl}}/health
 

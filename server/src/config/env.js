@@ -21,6 +21,9 @@ const REQUIRED = [
   'SMTP_PASS',
   'EMAIL_FROM',
   'CLIENT_URL',
+  'CLOUDINARY_CLOUD_NAME',
+  'CLOUDINARY_API_KEY',
+  'CLOUDINARY_API_SECRET',
 ];
 
 const missing = REQUIRED.filter((key) => !process.env[key]);
@@ -54,4 +57,10 @@ module.exports = {
   },
 
   clientUrl: process.env.CLIENT_URL,
+
+  cloudinary: {
+    cloudName:  process.env.CLOUDINARY_CLOUD_NAME,
+    apiKey:     process.env.CLOUDINARY_API_KEY,
+    apiSecret:  process.env.CLOUDINARY_API_SECRET,
+  },
 };

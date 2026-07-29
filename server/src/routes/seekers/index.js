@@ -1,0 +1,326 @@
+/**
+ * Seeker routes.
+ *
+ * Routes:
+ *   GET  /api/seekers/search         — search compatible donors (no auth required
+ *                                      so unregistered users can preview results,
+ *                                      but results are anonymised regardless)
+ *   POST /api/seekers/requests        — submit a blood request with document upload
+ *   GET  /api/seekers/requests/mine   — seeker's own request history + status
+ *   DELETE /api/seekers/requests/:id  — cancel a pending_review request
+ *
+ * Document verification flow:
+ *   1. Seeker submits the form with a photo of the hospital-issued blood slip.
+ *   2. Multer receives the file buffer from memoryStorage.
+ *   3. Buffer is piped to Cloudinary via uploadBuffer(); the returned secure_url
+ *      is stored on the Request document.
+ *   4. Request is created with status 'pending_review'.
+ *   5. Admin reviews in Phase 5 and moves to 'approved' / 'rejected'.
+ *
+ * Anonymous routing:
+ *   The GET /search endpoint returns donor city and level only — no names,
+ *   emails, or phone numbers are ever exposed to the seeker.
+ */
+
+'use strict';
+
+const express = require('express');
+
+const { Request }                              = require('../../models/Request');
+const { DonorProfile }                         = require('../../models/DonorProfile');
+const { User }                                 = require('../../models/User');
+const { requireAuth, requireRole }             = require('../../middleware/auth');
+const upload                                   = require('../../middleware/upload');
+const { uploadBuffer }                         = require('../../utils/cloudinaryUpload');
+const { getCompatibleDonorGroups,
+        getCompatibilitySummary,
+        ALL_BLOOD_GROUPS }                     = require('../../utils/compatibility');
+const { getEligibility }                       = require('../../utils/eligibility');
+const { getDonorLevel }                        = require('../../utils/donorLevels');
+
+const router = express.Router();
+
+// ── GET /api/seekers/search ───────────────────────────────────────────────────
+/**
+ * Searches for available, eligible donors whose blood group is compatible with
+ * the given patient blood group. Optionally filters by city.
+ *
+ * This endpoint is intentionally public (no requireAuth) so unauthenticated
+ * seekers can preview the donor landscape before signing up. Results are
+ * fully anonymised regardless.
+ *
+ * Query params:
+ *   patientBloodGroup (required) — the patient's blood group
+ *   city              (optional) — filter by donor city
+ *   page, limit       (optional) — pagination
+ */
+router.get('/search', async (req, res, next) => {
+  try {
+    const { patientBloodGroup, city, page = 1, limit = 20 } = req.query;
+
+    if (!patientBloodGroup || !ALL_BLOOD_GROUPS.includes(patientBloodGroup)) {
+      return res.status(400).json({
+        success: false,
+        message: `patientBloodGroup is required and must be one of: ${ALL_BLOOD_GROUPS.join(', ')}.`,
+      });
+    }
+
+    const compatibleGroups = getCompatibleDonorGroups(patientBloodGroup);
+    const summary          = getCompatibilitySummary(patientBloodGroup);
+
+    const pageNum  = Math.max(parseInt(page,  10), 1);
+    const limitNum = Math.min(parseInt(limit, 10), 50);
+    const skip     = (pageNum - 1) * limitNum;
+
+    // Pull all availability-matching profiles; eligibility is time-based so
+    // it must be computed in JS after the DB query.
+    const profiles = await DonorProfile.find({
+      bloodGroup:  { $in: compatibleGroups },
+      isAvailable: true,
+    })
+      .populate('user', 'name city')
+      .lean();
+
+    // Filter by eligibility and optional city match.
+    const eligible = profiles.filter((p) => {
+      const { eligible } = getEligibility(p.gender, p.lastDonationDate);
+      if (!eligible) return false;
+      if (city && p.user?.city?.toLowerCase() !== city.toLowerCase()) return false;
+      return true;
+    });
+
+    const total     = eligible.length;
+    const paginated = eligible.slice(skip, skip + limitNum);
+
+    // Anonymise — seeker never sees donor identity.
+    const results = paginated.map((p) => ({
+      donorId:    p._id,
+      bloodGroup: p.bloodGroup,
+      city:       p.user?.city || 'Unknown',
+      level:      getDonorLevel(p.confirmedDonations),
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        patientBloodGroup,
+        compatibilitySummary: summary,
+        results,
+        total,
+        page:  pageNum,
+        pages: Math.ceil(total / limitNum),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── POST /api/seekers/requests ────────────────────────────────────────────────
+/**
+ * Submits a new blood request with a supporting document upload.
+ * Requires seeker authentication.
+ *
+ * Multipart body fields:
+ *   patientBloodGroup (required)
+ *   hospitalName      (required)
+ *   hospitalCity      (optional)
+ *   unitsNeeded       (optional, default 1)
+ *   urgency           (optional: routine|urgent|critical)
+ *   patientName       (optional)
+ *   additionalNotes   (optional)
+ *   document          (required file — JPEG/PNG/WebP/HEIC/PDF, max 5 MB)
+ */
+router.post(
+  '/requests',
+  requireAuth,
+  requireRole(['seeker']),
+  upload.single('document'),
+  async (req, res, next) => {
+    try {
+      // Multer fileFilter error surfaces here as req.fileValidationError or
+      // is caught by our error handler if multer threw it as a real Error.
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'A document file (hospital blood request slip) is required.',
+        });
+      }
+
+      const {
+        patientBloodGroup,
+        hospitalName,
+        hospitalCity,
+        unitsNeeded,
+        urgency,
+        patientName,
+        additionalNotes,
+      } = req.body;
+
+      if (!patientBloodGroup || !hospitalName) {
+        return res.status(400).json({
+          success: false,
+          message: 'patientBloodGroup and hospitalName are required.',
+        });
+      }
+
+      if (!ALL_BLOOD_GROUPS.includes(patientBloodGroup)) {
+        return res.status(400).json({
+          success: false,
+          message: `patientBloodGroup must be one of: ${ALL_BLOOD_GROUPS.join(', ')}.`,
+        });
+      }
+
+      // Upload the document buffer to Cloudinary.
+      const uploadResult = await uploadBuffer(
+        req.file.buffer,
+        'bloodlink/requests'
+      );
+
+      const request = await Request.create({
+        seeker:            req.user.id,
+        patientBloodGroup,
+        hospitalName:      hospitalName.trim(),
+        hospitalCity:      hospitalCity?.trim(),
+        unitsNeeded:       unitsNeeded ? parseInt(unitsNeeded, 10) : 1,
+        urgency:           urgency || 'routine',
+        patientName:       patientName?.trim(),
+        additionalNotes:   additionalNotes?.trim(),
+        documentUrl:       uploadResult.secure_url,
+        documentPublicId:  uploadResult.public_id,
+      });
+
+      return res.status(201).json({
+        success: true,
+        message:
+          'Request submitted and is now pending admin review. You will be notified once approved.',
+        data: {
+          requestId:  request._id,
+          status:     request.status,
+          bloodGroup: request.patientBloodGroup,
+          createdAt:  request.createdAt,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── GET /api/seekers/requests/mine ────────────────────────────────────────────
+/**
+ * Returns the authenticated seeker's own requests in reverse-chronological order.
+ * Includes all fields visible to the seeker (status, hospital, admin note, etc.)
+ * but excludes documentPublicId.
+ *
+ * Query params: page, limit, status (optional filter)
+ */
+router.get(
+  '/requests/mine',
+  requireAuth,
+  requireRole(['seeker']),
+  async (req, res, next) => {
+    try {
+      const { page = 1, limit = 10, status } = req.query;
+
+      const pageNum  = Math.max(parseInt(page, 10), 1);
+      const limitNum = Math.min(parseInt(limit, 10), 50);
+      const skip     = (pageNum - 1) * limitNum;
+
+      const filter = { seeker: req.user.id };
+      if (status) filter.status = status;
+
+      const [requests, total] = await Promise.all([
+        Request.find(filter)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limitNum)
+          .lean(),
+        Request.countDocuments(filter),
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          requests,
+          total,
+          page:  pageNum,
+          pages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── DELETE /api/seekers/requests/:id ─────────────────────────────────────────
+/**
+ * Cancels a request that is still in 'pending_review'. Once a request is
+ * approved or rejected the seeker can no longer cancel it.
+ */
+router.delete(
+  '/requests/:id',
+  requireAuth,
+  requireRole(['seeker']),
+  async (req, res, next) => {
+    try {
+      const request = await Request.findOne({
+        _id:    req.params.id,
+        seeker: req.user.id,
+      });
+
+      if (!request) {
+        return res.status(404).json({ success: false, message: 'Request not found.' });
+      }
+
+      if (request.status !== 'pending_review') {
+        return res.status(400).json({
+          success: false,
+          message: `This request is already ${request.status} and cannot be cancelled.`,
+        });
+      }
+
+      request.status      = 'cancelled';
+      request.cancelledAt = new Date();
+      await request.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Request cancelled.',
+        data: { requestId: request._id, status: request.status },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── GET /api/seekers/compatibility ────────────────────────────────────────────
+/**
+ * Returns the full compatibility matrix for a given blood group.
+ * Useful for the "Who can donate to me?" info card on the seeker dashboard.
+ *
+ * Query params: bloodGroup (required)
+ */
+router.get('/compatibility', async (req, res, next) => {
+  try {
+    const { bloodGroup } = req.query;
+
+    if (!bloodGroup || !ALL_BLOOD_GROUPS.includes(bloodGroup)) {
+      return res.status(400).json({
+        success: false,
+        message: `bloodGroup must be one of: ${ALL_BLOOD_GROUPS.join(', ')}.`,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: getCompatibilitySummary(bloodGroup),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+module.exports = router;

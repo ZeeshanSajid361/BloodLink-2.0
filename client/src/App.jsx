@@ -17,6 +17,7 @@ import LoginPage       from './pages/auth/LoginPage';
 import VerifyEmailPage from './pages/auth/VerifyEmailPage';
 import DashboardPage   from './pages/dashboard/DashboardPage';
 import DonorDashboard  from './pages/dashboard/DonorDashboard';
+import SeekerDashboard from './pages/dashboard/SeekerDashboard';
 
 export default function App() {
   return (
@@ -44,6 +45,16 @@ export default function App() {
             element={
               <ProtectedRoute roles={['donor']}>
                 <DonorDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Seeker dashboard (Phase 3) */}
+          <Route
+            path="/dashboard/seeker"
+            element={
+              <ProtectedRoute roles={['seeker']}>
+                <SeekerDashboard />
               </ProtectedRoute>
             }
           />

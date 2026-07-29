@@ -1,0 +1,63 @@
+/**
+ * Cloudinary upload helper.
+ *
+ * Wraps the Cloudinary SDK v2 upload_stream API in a Promise so it can be
+ * awaited directly from route handlers. Multer provides the file buffer via
+ * memoryStorage — no temp files are written to disk.
+ *
+ * All uploads go into the 'bloodlink/requests' folder on Cloudinary so they
+ * are easy to find and bulk-delete if needed.
+ *
+ * Returns the Cloudinary upload result object, from which the caller extracts:
+ *   - result.secure_url  → stored as documentUrl on the Request document
+ *   - result.public_id   → stored for future deletion (admin reject flow)
+ */
+
+'use strict';
+
+const cloudinary = require('cloudinary').v2;
+const { cloudinary: cloudConfig } = require('../config/env');
+
+cloudinary.config({
+  cloud_name: cloudConfig.cloudName,
+  api_key:    cloudConfig.apiKey,
+  api_secret: cloudConfig.apiSecret,
+});
+
+/**
+ * Uploads a Buffer to Cloudinary and returns the upload result.
+ *
+ * @param {Buffer} buffer   - File buffer from Multer memoryStorage
+ * @param {string} folder   - Cloudinary folder path
+ * @param {string} [publicId] - Optional explicit public_id (e.g. for updates)
+ * @returns {Promise<import('cloudinary').UploadApiResponse>}
+ */
+function uploadBuffer(buffer, folder = 'bloodlink/requests', publicId) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      folder,
+      resource_type: 'auto',
+      ...(publicId && { public_id: publicId }),
+    };
+
+    const stream = cloudinary.uploader.upload_stream(options, (err, result) => {
+      if (err) return reject(err);
+      resolve(result);
+    });
+
+    stream.end(buffer);
+  });
+}
+
+/**
+ * Deletes a Cloudinary asset by public_id.
+ * Used when an admin rejects a request — cleans up the stored document.
+ *
+ * @param {string} publicId
+ * @returns {Promise<void>}
+ */
+async function deleteAsset(publicId) {
+  await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
+}
+
+module.exports = { uploadBuffer, deleteAsset };

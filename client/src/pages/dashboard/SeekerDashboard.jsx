@@ -1,0 +1,700 @@
+/**
+ * Seeker Dashboard — main component.
+ *
+ * Three tabs:
+ *   Search    — find compatible donors by blood group + city
+ *   New Request — submit a blood request with document upload
+ *   My Requests — own request history with status timeline
+ */
+
+import { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Search, FilePlus, ClipboardList, LogOut,
+  MapPin, AlertCircle, CheckCircle2, FileText,
+  Loader2, X, ExternalLink,
+} from 'lucide-react';
+import toast from 'react-hot-toast';
+
+import { useAuth }                          from '../../context/AuthContext';
+import { useSeekerRequests, useDonorSearch } from '../../hooks/useSeekerData';
+import api                                  from '../../lib/api';
+import '../../styles/dashboard.css';
+import '../../styles/seeker.css';
+
+const BLOOD_GROUPS   = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+const URGENCY_LEVELS = ['routine', 'urgent', 'critical'];
+
+const NAV_ITEMS = [
+  { id: 'search',   label: 'Find Donors',  icon: Search },
+  { id: 'request',  label: 'New Request',  icon: FilePlus },
+  { id: 'history',  label: 'My Requests',  icon: ClipboardList },
+];
+
+export default function SeekerDashboard() {
+  const { user, logout }   = useAuth();
+  const navigate           = useNavigate();
+  const [activeTab, setTab] = useState('search');
+
+  const { requests, loading: reqLoading, error: reqError, total, refetch } = useSeekerRequests();
+
+  const initials = user?.name
+    ?.split(' ').map((w) => w[0]).join('').toUpperCase().slice(0, 2) || '?';
+
+  async function handleLogout() {
+    await logout();
+    navigate('/login', { replace: true });
+  }
+
+  return (
+    <div className="dashboard-shell">
+      {/* ── Sidebar ── */}
+      <aside className="sidebar">
+        <a href="/" className="sidebar-logo">
+          <div className="sidebar-logo-icon">🩸</div>
+          <span className="sidebar-logo-text">Blood<span>Link</span></span>
+        </a>
+
+        <div className="sidebar-user">
+          <div className="sidebar-user-card">
+            <div className="sidebar-avatar">{initials}</div>
+            <div className="sidebar-user-info">
+              <div className="sidebar-user-name">{user?.name}</div>
+              <div className="sidebar-user-role">Seeker</div>
+            </div>
+          </div>
+        </div>
+
+        <nav className="sidebar-nav">
+          <div className="sidebar-nav-label">Navigation</div>
+          {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              id={`nav-${id}`}
+              className={`sidebar-nav-link${activeTab === id ? ' active' : ''}`}
+              onClick={() => setTab(id)}
+            >
+              <Icon size={18} />
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-footer">
+          <button id="seeker-logout" className="sidebar-nav-link" onClick={handleLogout}>
+            <LogOut size={18} />
+            Sign out
+          </button>
+        </div>
+      </aside>
+
+      {/* ── Main ── */}
+      <main className="dashboard-main">
+        {activeTab === 'search'  && <SearchTab />}
+        {activeTab === 'request' && (
+          <RequestTab
+            onSubmitted={() => { refetch(); setTab('history'); }}
+          />
+        )}
+        {activeTab === 'history' && (
+          <HistoryTab
+            requests={requests}
+            loading={reqLoading}
+            error={reqError}
+            total={total}
+            refetch={refetch}
+            onNewRequest={() => setTab('request')}
+          />
+        )}
+      </main>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════
+   SEARCH TAB
+════════════════════════════════════════════════════════ */
+function SearchTab() {
+  const [bloodGroup, setBloodGroup] = useState('');
+  const [city,       setCity]       = useState('');
+  const { results, summary, loading, error, search } = useDonorSearch();
+
+  function handleSearch(e) {
+    e.preventDefault();
+    if (!bloodGroup) { toast.error('Select a blood group first.'); return; }
+    search(bloodGroup, city.trim());
+  }
+
+  return (
+    <>
+      <div className="dashboard-topbar animate-fade-up">
+        <div>
+          <h1 className="dashboard-page-title">Find Compatible Donors</h1>
+          <p className="dashboard-page-subtitle">
+            Search by patient blood group — we match all compatible donor types.
+          </p>
+        </div>
+      </div>
+
+      {/* Search controls */}
+      <form className="search-controls animate-fade-up" onSubmit={handleSearch}>
+        <div className="input-group" style={{ margin: 0 }}>
+          <label className="input-label" htmlFor="search-bg">
+            Patient blood group <span className="required">*</span>
+          </label>
+          <select
+            id="search-bg"
+            className="input"
+            value={bloodGroup}
+            onChange={(e) => setBloodGroup(e.target.value)}
+          >
+            <option value="">— Select —</option>
+            {BLOOD_GROUPS.map((bg) => (
+              <option key={bg} value={bg}>{bg}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="input-group" style={{ margin: 0 }}>
+          <label className="input-label" htmlFor="search-city">City (optional)</label>
+          <input
+            id="search-city"
+            className="input"
+            placeholder="Islamabad"
+            value={city}
+            onChange={(e) => setCity(e.target.value)}
+          />
+        </div>
+
+        <button
+          id="donor-search-btn"
+          type="submit"
+          className="btn btn-primary"
+          disabled={loading}
+        >
+          {loading ? <Loader2 size={16} className="spin" /> : <Search size={16} />}
+          Search
+        </button>
+      </form>
+
+      {/* Compatibility banner — shown after first search */}
+      {summary && (
+        <div className="compat-banner animate-fade-up">
+          <span className="compat-banner-icon">💡</span>
+          <div>
+            <div className="compat-banner-title">
+              Compatible donor types for {bloodGroup}
+              {summary.isUniversalRecipient && ' (Universal Recipient — can receive from all groups)'}
+            </div>
+            <div className="compat-banner-groups">
+              {summary.compatibleDonors.map((g) => (
+                <span key={g} className="compat-group-pill">{g}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error state */}
+      {error && (
+        <div className="animate-fade-up" style={{ color: 'var(--red-400)', fontSize: '0.9rem', marginBottom: 'var(--space-4)' }}>
+          <AlertCircle size={15} style={{ display: 'inline', marginRight: 6 }} />
+          {error}
+        </div>
+      )}
+
+      {/* Results */}
+      {results !== null && (
+        <div className="animate-fade-up">
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: 'var(--space-4)' }}>
+            {results.length === 0
+              ? 'No available donors found for these criteria.'
+              : `${results.length} available donor${results.length !== 1 ? 's' : ''} found`}
+          </p>
+
+          {results.length > 0 && (
+            <div className="results-grid">
+              {results.map((d) => (
+                <div key={d.donorId} className="donor-result-card">
+                  <div className="donor-result-blood">{d.bloodGroup}</div>
+                  <div className="donor-result-city">
+                    <MapPin size={13} /> {d.city}
+                  </div>
+                  {d.level && (
+                    <div className="donor-result-level">
+                      <span>{d.level.icon}</span>
+                      <span>{d.level.label}</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {results.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-state-icon">🔍</div>
+              <h3>No donors found</h3>
+              <p>Try a broader city search or check back later.</p>
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ════════════════════════════════════════════════════════
+   NEW REQUEST TAB
+════════════════════════════════════════════════════════ */
+function RequestTab({ onSubmitted }) {
+  const [form, setForm] = useState({
+    patientBloodGroup: '',
+    hospitalName:      '',
+    hospitalCity:      '',
+    unitsNeeded:       1,
+    urgency:           'routine',
+    patientName:       '',
+    additionalNotes:   '',
+  });
+  const [file,     setFile]     = useState(null);
+  const [saving,   setSaving]   = useState(false);
+  const [apiError, setApiError] = useState('');
+  const fileRef                 = useRef();
+
+  function handleChange(e) {
+    const { name, value } = e.target;
+    setForm((p) => ({ ...p, [name]: value }));
+    setApiError('');
+  }
+
+  function handleFile(e) {
+    const f = e.target.files?.[0];
+    if (f) setFile(f);
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!form.patientBloodGroup) { toast.error('Select patient blood group.'); return; }
+    if (!form.hospitalName.trim()) { toast.error('Hospital name is required.'); return; }
+    if (!file) { toast.error('Please upload the hospital blood request slip.'); return; }
+
+    setSaving(true);
+    setApiError('');
+
+    try {
+      const fd = new FormData();
+      Object.entries(form).forEach(([k, v]) => fd.append(k, v));
+      fd.append('document', file);
+
+      await api.post('/seekers/requests', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      toast.success('Request submitted! It is now pending admin review.');
+      onSubmitted();
+    } catch (err) {
+      setApiError(err.response?.data?.message || 'Submission failed. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="dashboard-topbar animate-fade-up">
+        <div>
+          <h1 className="dashboard-page-title">Submit Blood Request</h1>
+          <p className="dashboard-page-subtitle">
+            Upload your hospital-issued blood request slip for verification.
+          </p>
+        </div>
+      </div>
+
+      <div className="profile-form-card animate-fade-up">
+        {/* Info note */}
+        <div style={{
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'rgba(21,101,192,0.07)',
+          borderRadius: 'var(--radius-md)',
+          fontSize: '0.8125rem',
+          color: 'var(--blue-300)',
+          borderLeft: '2px solid var(--blue-600)',
+          marginBottom: 'var(--space-5)',
+        }}>
+          ℹ Your request will be reviewed by an admin before donors are notified.
+          Approval typically takes a few hours.
+        </div>
+
+        <form onSubmit={handleSubmit} noValidate encType="multipart/form-data">
+          <div className="request-form-grid">
+
+            {/* Patient blood group */}
+            <div className="input-group">
+              <label className="input-label" htmlFor="req-bg">
+                Patient blood group <span className="required">*</span>
+              </label>
+              <select
+                id="req-bg"
+                name="patientBloodGroup"
+                className="input"
+                value={form.patientBloodGroup}
+                onChange={handleChange}
+              >
+                <option value="">— Select —</option>
+                {BLOOD_GROUPS.map((bg) => (
+                  <option key={bg} value={bg}>{bg}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Units needed */}
+            <div className="input-group">
+              <label className="input-label" htmlFor="req-units">Units needed</label>
+              <input
+                id="req-units"
+                name="unitsNeeded"
+                type="number"
+                min={1}
+                max={10}
+                className="input"
+                value={form.unitsNeeded}
+                onChange={handleChange}
+              />
+            </div>
+
+            {/* Hospital name */}
+            <div className="input-group">
+              <label className="input-label" htmlFor="req-hospital">
+                Hospital name <span className="required">*</span>
+              </label>
+              <input
+                id="req-hospital"
+                name="hospitalName"
+                className="input"
+                placeholder="PIMS Hospital"
+                value={form.hospitalName}
+                onChange={handleChange}
+              />
+            </div>
+
+            {/* Hospital city */}
+            <div className="input-group">
+              <label className="input-label" htmlFor="req-hcity">Hospital city</label>
+              <input
+                id="req-hcity"
+                name="hospitalCity"
+                className="input"
+                placeholder="Islamabad"
+                value={form.hospitalCity}
+                onChange={handleChange}
+              />
+            </div>
+
+            {/* Patient name */}
+            <div className="input-group">
+              <label className="input-label" htmlFor="req-patient">Patient name</label>
+              <input
+                id="req-patient"
+                name="patientName"
+                className="input"
+                placeholder="Optional"
+                value={form.patientName}
+                onChange={handleChange}
+              />
+            </div>
+
+            {/* Urgency */}
+            <div className="input-group">
+              <label className="input-label">Urgency level</label>
+              <div className="urgency-row">
+                {URGENCY_LEVELS.map((u) => (
+                  <button
+                    key={u}
+                    type="button"
+                    id={`urgency-${u}`}
+                    className={`urgency-option${form.urgency === u ? ` selected-${u}` : ''}`}
+                    onClick={() => setForm((p) => ({ ...p, urgency: u }))}
+                  >
+                    {u === 'routine'  && '🟢'} {u === 'urgent' && '🟡'} {u === 'critical' && '🔴'}
+                    {' '}{u.charAt(0).toUpperCase() + u.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div className="input-group full">
+              <label className="input-label" htmlFor="req-notes">Additional notes</label>
+              <textarea
+                id="req-notes"
+                name="additionalNotes"
+                className="input"
+                rows={3}
+                maxLength={500}
+                placeholder="Any additional context for the admin reviewer..."
+                value={form.additionalNotes}
+                onChange={handleChange}
+                style={{ resize: 'vertical', minHeight: 80 }}
+              />
+            </div>
+
+            {/* Document upload */}
+            <div className="input-group full">
+              <label className="input-label">
+                Hospital blood request slip <span className="required">*</span>
+                <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>
+                  {' '}(JPEG, PNG, PDF — max 5 MB)
+                </span>
+              </label>
+
+              <div className="file-drop-zone" onClick={() => fileRef.current?.click()}>
+                <input
+                  ref={fileRef}
+                  id="req-document"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,application/pdf"
+                  onChange={handleFile}
+                  style={{ display: 'none' }}
+                />
+                <div className="file-drop-icon">📄</div>
+                <div className="file-drop-label">Click to choose file</div>
+                <div className="file-drop-hint">JPEG · PNG · WebP · PDF — max 5 MB</div>
+              </div>
+
+              {file && (
+                <div className="file-selected">
+                  <CheckCircle2 size={16} />
+                  <span>{file.name}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                    ({(file.size / 1024).toFixed(0)} KB)
+                  </span>
+                  <button
+                    type="button"
+                    style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
+                    onClick={() => { setFile(null); fileRef.current.value = ''; }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {apiError && (
+            <div style={{ color: 'var(--red-400)', fontSize: '0.875rem', marginTop: 'var(--space-4)', display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+              <AlertCircle size={16} />{apiError}
+            </div>
+          )}
+
+          <div className="flex gap-4 mt-6">
+            <button
+              id="request-submit"
+              type="submit"
+              className="btn btn-primary"
+              disabled={saving}
+            >
+              {saving ? <Loader2 size={16} className="spin" /> : <FilePlus size={16} />}
+              Submit request
+            </button>
+          </div>
+        </form>
+      </div>
+    </>
+  );
+}
+
+/* ════════════════════════════════════════════════════════
+   HISTORY TAB
+════════════════════════════════════════════════════════ */
+function HistoryTab({ requests, loading, error, total, refetch, onNewRequest }) {
+  async function handleCancel(id) {
+    try {
+      await api.delete(`/seekers/requests/${id}`);
+      toast.success('Request cancelled.');
+      refetch();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not cancel request.');
+    }
+  }
+
+  return (
+    <>
+      <div className="dashboard-topbar animate-fade-up">
+        <div>
+          <h1 className="dashboard-page-title">My Requests</h1>
+          <p className="dashboard-page-subtitle">
+            {total > 0 ? `${total} request${total !== 1 ? 's' : ''} submitted` : 'No requests yet'}
+          </p>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={onNewRequest}>
+          <FilePlus size={15} /> New request
+        </button>
+      </div>
+
+      {loading && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="skeleton" style={{ height: 140, borderRadius: 16 }} />
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <div style={{ color: 'var(--red-400)', fontSize: '0.9rem' }}>
+          <AlertCircle size={15} style={{ display: 'inline', marginRight: 6 }} />
+          {error}
+        </div>
+      )}
+
+      {!loading && !error && requests.length === 0 && (
+        <div className="empty-state animate-fade-up">
+          <div className="empty-state-icon">📋</div>
+          <h3>No requests yet</h3>
+          <p style={{ marginBottom: 'var(--space-5)' }}>
+            Submit a request with your hospital blood slip to get started.
+          </p>
+          <button className="btn btn-primary" onClick={onNewRequest}>
+            <FilePlus size={16} /> Submit first request
+          </button>
+        </div>
+      )}
+
+      {!loading && requests.length > 0 && (
+        <div className="request-list animate-fade-up">
+          {requests.map((r) => (
+            <RequestCard key={r._id} request={r} onCancel={handleCancel} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ── Single request card with status timeline ── */
+const STATUS_STEPS = [
+  { key: 'pending_review', label: 'Submitted' },
+  { key: 'approved',       label: 'Approved' },
+  { key: 'fulfilled',      label: 'Fulfilled' },
+];
+
+const STATUS_LABELS = {
+  pending_review: { text: 'Pending Review', badge: 'badge-amber' },
+  approved:       { text: 'Approved',       badge: 'badge-green' },
+  rejected:       { text: 'Rejected',       badge: 'badge-red'   },
+  fulfilled:      { text: 'Fulfilled',      badge: 'badge-blue'  },
+  cancelled:      { text: 'Cancelled',      badge: ''            },
+};
+
+function RequestCard({ request, onCancel }) {
+  const meta = STATUS_LABELS[request.status] || {};
+  const isRejected   = request.status === 'rejected';
+  const isCancelled  = request.status === 'cancelled';
+  const isCancellable = request.status === 'pending_review';
+
+  // Compute timeline step states
+  function stepState(stepKey) {
+    if (isRejected || isCancelled) return stepKey === 'pending_review' ? 'done' : 'locked';
+    const order = STATUS_STEPS.map((s) => s.key);
+    const currentIdx = order.indexOf(request.status);
+    const stepIdx    = order.indexOf(stepKey);
+    if (stepIdx <  currentIdx) return 'done';
+    if (stepIdx === currentIdx) return 'active';
+    return 'locked';
+  }
+
+  return (
+    <div className="request-item">
+      <div className="request-item-header">
+        <div>
+          <div className="request-item-title">
+            {request.patientBloodGroup} · {request.hospitalName}
+          </div>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: 4 }}>
+            Submitted {formatDate(request.createdAt)}
+          </div>
+        </div>
+
+        <div className="flex gap-3 items-center">
+          <span className={`badge ${meta.badge}`}>{meta.text}</span>
+          {isCancellable && (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => onCancel(request._id)}
+            >
+              <X size={13} /> Cancel
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="request-item-meta">
+        <span>🏥 {request.hospitalName}{request.hospitalCity ? `, ${request.hospitalCity}` : ''}</span>
+        <span>💉 {request.unitsNeeded} unit{request.unitsNeeded !== 1 ? 's' : ''}</span>
+        <span>⚡ {capitalise(request.urgency)}</span>
+        {request.patientName && <span>👤 {request.patientName}</span>}
+      </div>
+
+      {/* Admin note if rejected */}
+      {request.adminNote && (
+        <div style={{
+          padding: 'var(--space-3) var(--space-4)',
+          background: isRejected ? 'rgba(192,57,43,0.06)' : 'rgba(21,101,192,0.06)',
+          borderRadius: 'var(--radius-md)',
+          fontSize: '0.8125rem',
+          color: isRejected ? 'var(--red-300)' : 'var(--blue-300)',
+          marginBottom: 'var(--space-4)',
+        }}>
+          <strong>Admin note:</strong> {request.adminNote}
+        </div>
+      )}
+
+      {/* Document link */}
+      {request.documentUrl && (
+        <a
+          className="doc-link"
+          href={request.documentUrl}
+          target="_blank"
+          rel="noreferrer"
+          style={{ marginBottom: 'var(--space-4)', display: 'inline-flex' }}
+        >
+          <FileText size={13} />
+          View uploaded document
+          <ExternalLink size={12} />
+        </a>
+      )}
+
+      {/* Status timeline — skip for cancelled/rejected */}
+      {!isCancelled && (
+        <div className="status-timeline">
+          {STATUS_STEPS.map((step) => {
+            const state = stepState(step.key);
+            return (
+              <div key={step.key} className={`status-step ${isRejected && step.key !== 'pending_review' ? 'failed' : state}`}>
+                <div className="status-dot">
+                  {state === 'done' && '✓'}
+                  {state === 'active' && '●'}
+                  {isRejected && step.key === 'approved' && '✕'}
+                </div>
+                <span className="status-label">
+                  {isRejected && step.key === 'approved' ? 'Rejected' : step.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Utilities ── */
+function formatDate(date) {
+  return new Intl.DateTimeFormat('en-PK', {
+    year: 'numeric', month: 'short', day: 'numeric',
+  }).format(new Date(date));
+}
+
+function capitalise(str) {
+  return str ? str.charAt(0).toUpperCase() + str.slice(1) : '';
+}
