@@ -2,6 +2,18 @@
 
 A full-stack MERN platform connecting blood donors, seekers, hospitals, and administrators — built with document-based request verification and real-time notifications.
 
+## Screenshots
+
+<div align="center">
+  <img src="images/1-register.png" alt="Registration Form" width="48%">
+  <img src="images/2-donor-dashboard.png" alt="Donor Dashboard" width="48%">
+</div>
+<br/>
+<div align="center">
+  <img src="images/3-seeker-dashboard.png" alt="Seeker Dashboard - Find Donors" width="48%">
+  <img src="images/4-seeker-request.png" alt="Seeker Dashboard - Blood Request" width="48%">
+</div>
+
 ## Stack
 
 | Layer    | Technology                                      |
