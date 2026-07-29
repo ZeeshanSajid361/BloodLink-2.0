@@ -1,0 +1,285 @@
+/**
+ * Donor routes.
+ *
+ * All routes require a verified, non-blocked donor account (requireAuth +
+ * requireRole(['donor'])). The eligibility result and recognition level are
+ * computed on every GET /me response so they are always current — no cron
+ * job, no stale boolean.
+ *
+ * Routes:
+ *   GET    /api/donors/me              — fetch own profile + eligibility + level
+ *   PUT    /api/donors/me              — update editable profile fields
+ *   PATCH  /api/donors/me/availability — toggle isAvailable
+ *   GET    /api/donors/search          — search by blood group + city (Phase 3 dependency)
+ */
+
+'use strict';
+
+const express = require('express');
+
+const { DonorProfile, BLOOD_GROUPS } = require('../../models/DonorProfile');
+const { User }                       = require('../../models/User');
+const { requireAuth, requireRole }   = require('../../middleware/auth');
+const { getEligibility }             = require('../../utils/eligibility');
+const { getDonorLevel, getLevelProgress, LEVELS } = require('../../utils/donorLevels');
+
+const router = express.Router();
+
+// Every donor route requires authentication and the donor role.
+router.use(requireAuth, requireRole(['donor']));
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Builds the full donor response shape.
+ * Merges the User document (name, email, phone, city) with the DonorProfile
+ * (blood group, eligibility, level) so the client gets everything in one call.
+ *
+ * @param {import('mongoose').Document} user    - User document
+ * @param {import('mongoose').Document} profile - DonorProfile document
+ * @returns {object}
+ */
+function buildDonorResponse(user, profile) {
+  const eligibility   = getEligibility(profile.gender, profile.lastDonationDate);
+  const level         = getDonorLevel(profile.confirmedDonations);
+  const levelProgress = getLevelProgress(profile.confirmedDonations);
+
+  // The next tier the donor is working toward (null if at max).
+  const nextLevel = level?.nextLevel ?? null;
+  const donationsToNextLevel = nextLevel
+    ? Math.max(nextLevel.minDonations - profile.confirmedDonations, 0)
+    : 0;
+
+  return {
+    id:    user._id,
+    name:  user.name,
+    email: user.email,
+    phone: user.phone,
+    city:  user.city,
+
+    bloodGroup:           profile.bloodGroup,
+    age:                  profile.age,
+    gender:               profile.gender,
+    isAvailable:          profile.isAvailable,
+    confirmedDonations:   profile.confirmedDonations,
+    bio:                  profile.bio,
+    lastDonationDate:     profile.lastDonationDate,
+
+    eligibility: {
+      eligible:          eligibility.eligible,
+      nextEligibleDate:  eligibility.nextEligibleDate,
+      daysUntilEligible: eligibility.daysUntilEligible,
+    },
+
+    level: level
+      ? {
+          id:                  level.id,
+          label:               level.label,
+          icon:                level.icon,
+          color:               level.color,
+          description:         level.description,
+          progress:            levelProgress,
+          nextLevel:           nextLevel ? { label: nextLevel.label, icon: nextLevel.icon, minDonations: nextLevel.minDonations } : null,
+          donationsToNextLevel,
+        }
+      : null,
+
+    allLevels: LEVELS.map((l) => ({
+      id:           l.id,
+      label:        l.label,
+      icon:         l.icon,
+      minDonations: l.minDonations,
+      unlocked:     profile.confirmedDonations >= l.minDonations,
+    })),
+
+    profileUpdatedAt: profile.updatedAt,
+    memberSince:      user.createdAt,
+  };
+}
+
+// ── GET /api/donors/me ────────────────────────────────────────────────────────
+/**
+ * Returns the authenticated donor's full profile, eligibility status, and
+ * recognition level. This is the primary data source for the donor dashboard.
+ */
+router.get('/me', async (req, res, next) => {
+  try {
+    const [user, profile] = await Promise.all([
+      User.findById(req.user.id),
+      DonorProfile.findOne({ user: req.user.id }),
+    ]);
+
+    if (!profile) {
+      return res.status(404).json({
+        success: false,
+        message: 'Donor profile not found. Please contact support.',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: buildDonorResponse(user, profile),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── PUT /api/donors/me ────────────────────────────────────────────────────────
+/**
+ * Updates editable donor profile fields. Sensitive fields (confirmedDonations,
+ * lastDonationDate) are intentionally excluded — they are only modified by
+ * admin/hospital actions to prevent self-gaming of the eligibility engine.
+ *
+ * Body (all optional): { name, phone, city, age, gender, bloodGroup,
+ *                        isAvailable, bio }
+ */
+router.put('/me', async (req, res, next) => {
+  try {
+    const {
+      name, phone, city,        // User fields
+      age, gender, bloodGroup,  // DonorProfile fields
+      isAvailable, bio,
+    } = req.body;
+
+    const [user, profile] = await Promise.all([
+      User.findById(req.user.id),
+      DonorProfile.findOne({ user: req.user.id }),
+    ]);
+
+    if (!profile) {
+      return res.status(404).json({ success: false, message: 'Donor profile not found.' });
+    }
+
+    // Apply User-level updates.
+    if (name  !== undefined) user.name  = name.trim();
+    if (phone !== undefined) user.phone = phone;
+    if (city  !== undefined) user.city  = city;
+
+    // Apply DonorProfile updates.
+    if (age        !== undefined) profile.age        = Number(age);
+    if (gender     !== undefined) profile.gender     = gender;
+    if (bloodGroup !== undefined) profile.bloodGroup = bloodGroup;
+    if (isAvailable !== undefined) profile.isAvailable = Boolean(isAvailable);
+    if (bio        !== undefined) profile.bio        = bio;
+
+    await Promise.all([user.save(), profile.save()]);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully.',
+      data: buildDonorResponse(user, profile),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── PATCH /api/donors/me/availability ────────────────────────────────────────
+/**
+ * Quick toggle endpoint for the dashboard availability switch.
+ * Accepts a single boolean field to minimise round-trip payload.
+ *
+ * Body: { isAvailable: boolean }
+ */
+router.patch('/me/availability', async (req, res, next) => {
+  try {
+    const { isAvailable } = req.body;
+
+    if (typeof isAvailable !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        message: 'isAvailable must be a boolean (true or false).',
+      });
+    }
+
+    const profile = await DonorProfile.findOneAndUpdate(
+      { user: req.user.id },
+      { isAvailable },
+      { new: true, runValidators: true }
+    );
+
+    if (!profile) {
+      return res.status(404).json({ success: false, message: 'Donor profile not found.' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `You are now marked as ${isAvailable ? 'available' : 'unavailable'}.`,
+      data: { isAvailable: profile.isAvailable },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── GET /api/donors/search ────────────────────────────────────────────────────
+/**
+ * Searches for available, eligible donors by blood group and optional city.
+ * Used by seekers in Phase 3; exposed on the donor router for now so it can
+ * be tested independently.
+ *
+ * Query params: bloodGroup (required), city (optional), page, limit
+ *
+ * Only donors who are both eligible AND available are returned — the canDonate
+ * gate in the eligibility engine is intentionally applied in JS after the DB
+ * query (rather than as a DB filter) because eligibility is a time-based
+ * calculation not stored in the document.
+ */
+router.get('/search', async (req, res, next) => {
+  try {
+    const { bloodGroup, city, page = 1, limit = 20 } = req.query;
+
+    if (!bloodGroup || !BLOOD_GROUPS.includes(bloodGroup)) {
+      return res.status(400).json({
+        success: false,
+        message: `bloodGroup is required and must be one of: ${BLOOD_GROUPS.join(', ')}.`,
+      });
+    }
+
+    const pageNum  = Math.max(parseInt(page, 10), 1);
+    const limitNum = Math.min(parseInt(limit, 10), 50);
+    const skip     = (pageNum - 1) * limitNum;
+
+    // Find all potentially-matching donors. Eligibility filtering happens
+    // in JS because it depends on the current timestamp and cannot be indexed.
+    const profiles = await DonorProfile.find({ bloodGroup, isAvailable: true })
+      .populate('user', 'name city')
+      .lean();
+
+    // Apply the eligibility filter and strip sensitive data for anonymous routing.
+    const now = new Date();
+    const eligible = profiles.filter((p) => {
+      const { eligible } = getEligibility(p.gender, p.lastDonationDate);
+      if (!eligible) return false;
+      // Apply city filter after eligibility to keep the city check in JS as well.
+      if (city && p.user?.city?.toLowerCase() !== city.toLowerCase()) return false;
+      return true;
+    });
+
+    const total      = eligible.length;
+    const paginated  = eligible.slice(skip, skip + limitNum);
+
+    // Return only anonymised donor info — seeker sees no personal details.
+    const results = paginated.map((p) => ({
+      donorId:    p._id,
+      bloodGroup: p.bloodGroup,
+      city:       p.user?.city || 'Unknown',
+      level:      getDonorLevel(p.confirmedDonations),
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        results,
+        total,
+        page:    pageNum,
+        pages:   Math.ceil(total / limitNum),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+module.exports = router;

@@ -1,0 +1,151 @@
+### ═══════════════════════════════════════════════════════════
+###  BloodLink 2.0 — REST API Test Collection
+###  Use with VS Code REST Client extension (humao.rest-client)
+### ═══════════════════════════════════════════════════════════
+
+@baseUrl    = http://localhost:5000
+@donorEmail = zeeshansajid361@gmail.com
+@password   = Password123!
+
+### ─────────────────────────────────────────────────────────────
+###  AUTH
+### ─────────────────────────────────────────────────────────────
+
+### [AUTH-01] Register as donor (includes donor-specific fields)
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "name":             "Zeeshan Sajid",
+  "email":            "{{donorEmail}}",
+  "password":         "{{password}}",
+  "role":             "donor",
+  "phone":            "03001234567",
+  "city":             "Rawalpindi",
+  "age":              22,
+  "gender":           "male",
+  "bloodGroup":       "O+",
+  "lastDonationDate": null
+}
+
+###
+
+### [AUTH-02] Register as seeker
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "name":     "Test Seeker",
+  "email":    "seeker@test.com",
+  "password": "{{password}}",
+  "role":     "seeker",
+  "phone":    "03111234567",
+  "city":     "Islamabad"
+}
+
+###
+
+### [AUTH-03] Login — copy accessToken and refreshToken from response
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email":    "{{donorEmail}}",
+  "password": "{{password}}"
+}
+
+###
+
+### [AUTH-04] Refresh access token
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "PASTE_REFRESH_TOKEN_HERE"
+}
+
+###
+
+### [AUTH-05] Resend verification email
+POST {{baseUrl}}/api/auth/resend-verification
+Content-Type: application/json
+
+{
+  "email": "{{donorEmail}}"
+}
+
+###
+
+### [AUTH-06] Logout
+POST {{baseUrl}}/api/auth/logout
+Content-Type: application/json
+
+{
+  "refreshToken": "PASTE_REFRESH_TOKEN_HERE"
+}
+
+### ─────────────────────────────────────────────────────────────
+###  DONOR MODULE  (set @token after login above)
+### ─────────────────────────────────────────────────────────────
+
+@token = PASTE_ACCESS_TOKEN_HERE
+
+### [DONOR-01] Get own profile + eligibility + recognition level
+GET {{baseUrl}}/api/donors/me
+Authorization: Bearer {{token}}
+
+###
+
+### [DONOR-02] Update donor profile
+PUT {{baseUrl}}/api/donors/me
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name":        "Zeeshan Sajid (updated)",
+  "city":        "Islamabad",
+  "age":         23,
+  "bloodGroup":  "O+",
+  "bio":         "Happy to donate whenever needed."
+}
+
+###
+
+### [DONOR-03] Mark as unavailable
+PATCH {{baseUrl}}/api/donors/me/availability
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "isAvailable": false
+}
+
+###
+
+### [DONOR-04] Mark as available again
+PATCH {{baseUrl}}/api/donors/me/availability
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "isAvailable": true
+}
+
+###
+
+### [DONOR-05] Search donors — blood group only
+GET {{baseUrl}}/api/donors/search?bloodGroup=O%2B
+Authorization: Bearer {{token}}
+
+###
+
+### [DONOR-06] Search donors — blood group + city
+GET {{baseUrl}}/api/donors/search?bloodGroup=O%2B&city=Rawalpindi
+Authorization: Bearer {{token}}
+
+###
+
+### [HEALTH] API health check
+GET {{baseUrl}}/health
+
+###

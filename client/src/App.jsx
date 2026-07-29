@@ -10,11 +10,13 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './components/routing/ProtectedRoute';
+import { useAuth } from './context/AuthContext';
 
 import RegisterPage    from './pages/auth/RegisterPage';
 import LoginPage       from './pages/auth/LoginPage';
 import VerifyEmailPage from './pages/auth/VerifyEmailPage';
 import DashboardPage   from './pages/dashboard/DashboardPage';
+import DonorDashboard  from './pages/dashboard/DonorDashboard';
 
 export default function App() {
   return (
@@ -26,18 +28,27 @@ export default function App() {
           <Route path="/login"        element={<LoginPage />} />
           <Route path="/verify-email" element={<VerifyEmailPage />} />
 
-          {/* Protected — any authenticated role */}
+          {/* Generic /dashboard resolves to the role-specific dashboard */}
           <Route
             path="/dashboard"
             element={
               <ProtectedRoute>
-                <DashboardPage />
+                <RoleDashboard />
               </ProtectedRoute>
             }
           />
 
-          {/* Role-specific dashboard aliases — Phase 2–5 will replace these
-              with real components; for now they all render the same stub. */}
+          {/* Donor dashboard (Phase 2) */}
+          <Route
+            path="/dashboard/donor"
+            element={
+              <ProtectedRoute roles={['donor']}>
+                <DonorDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Placeholder routes for roles built in Phases 3–5 */}
           <Route
             path="/dashboard/:role"
             element={
@@ -89,3 +100,22 @@ export default function App() {
     </AuthProvider>
   );
 }
+
+/**
+ * Reads the authenticated user's role and redirects to the correct dashboard.
+ * This lets /dashboard work as a universal entry point regardless of role.
+ */
+function RoleDashboard() {
+  const { user } = useAuth();
+  if (!user) return null;
+
+  const destinations = {
+    donor:    '/dashboard/donor',
+    seeker:   '/dashboard/seeker',
+    hospital: '/dashboard/hospital',
+    admin:    '/dashboard/admin',
+  };
+
+  return <Navigate to={destinations[user.role] || '/dashboard/donor'} replace />;
+}
+

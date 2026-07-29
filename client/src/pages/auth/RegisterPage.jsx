@@ -17,12 +17,16 @@ const ROLES = [
   { id: 'hospital', label: 'Hospital', icon: '🏨' },
 ];
 
+const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+
 export default function RegisterPage() {
   const navigate = useNavigate();
 
   const [form, setForm] = useState({
     name: '', email: '', password: '', confirmPassword: '',
     phone: '', city: '', role: 'donor',
+    // Donor-specific fields
+    age: '', gender: 'male', bloodGroup: 'O+',
   });
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
@@ -44,6 +48,12 @@ export default function RegisterPage() {
     if (!form.password)                      e.password = 'Password is required.';
     else if (form.password.length < 8)       e.password = 'Password must be at least 8 characters.';
     if (form.confirmPassword !== form.password) e.confirmPassword = 'Passwords do not match.';
+
+    if (form.role === 'donor') {
+      if (!form.age)                         e.age = 'Age is required.';
+      else if (Number(form.age) < 18)        e.age = 'Donors must be at least 18 years old.';
+      else if (Number(form.age) > 65)        e.age = 'Donors must be 65 or younger.';
+    }
     return e;
   }
 
@@ -57,12 +67,18 @@ export default function RegisterPage() {
 
     try {
       await api.post('/auth/register', {
-        name:     form.name,
-        email:    form.email,
-        password: form.password,
-        role:     form.role,
-        phone:    form.phone || undefined,
-        city:     form.city  || undefined,
+        name:        form.name,
+        email:       form.email,
+        password:    form.password,
+        role:        form.role,
+        phone:       form.phone || undefined,
+        city:        form.city  || undefined,
+        // Donor-specific (ignored by server for non-donor roles)
+        ...(form.role === 'donor' && {
+          age:        Number(form.age),
+          gender:     form.gender,
+          bloodGroup: form.bloodGroup,
+        }),
       });
       setSuccess(true);
     } catch (err) {
@@ -252,6 +268,81 @@ export default function RegisterPage() {
                   </div>
                 </div>
               </div>
+
+              {/* ── Donor-specific fields ── */}
+              {form.role === 'donor' && (
+                <>
+                  <div
+                    style={{
+                      padding: 'var(--space-3) var(--space-4)',
+                      background: 'rgba(192,57,43,0.06)',
+                      borderRadius: 'var(--radius-md)',
+                      fontSize: '0.8125rem',
+                      color: 'var(--red-300)',
+                      borderLeft: '2px solid var(--red-600)',
+                    }}
+                  >
+                    🩸 Donor details — required for eligibility tracking
+                  </div>
+
+                  <div className="flex gap-4">
+                    {/* Age */}
+                    <div className="input-group w-full">
+                      <label className="input-label" htmlFor="reg-age">
+                        Age <span className="required">*</span>
+                      </label>
+                      <input
+                        id="reg-age"
+                        name="age"
+                        type="number"
+                        min={18}
+                        max={65}
+                        className={`input${errors.age ? ' error' : ''}`}
+                        placeholder="22"
+                        value={form.age}
+                        onChange={handleChange}
+                      />
+                      {errors.age && <span className="input-error-msg"><AlertCircle size={13} />{errors.age}</span>}
+                    </div>
+
+                    {/* Gender */}
+                    <div className="input-group w-full">
+                      <label className="input-label" htmlFor="reg-gender">
+                        Gender <span className="required">*</span>
+                      </label>
+                      <select
+                        id="reg-gender"
+                        name="gender"
+                        className="input"
+                        value={form.gender}
+                        onChange={handleChange}
+                      >
+                        <option value="male">Male</option>
+                        <option value="female">Female</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Blood group */}
+                  <div className="input-group">
+                    <label className="input-label" htmlFor="reg-bloodGroup">
+                      Blood group <span className="required">*</span>
+                    </label>
+                    <select
+                      id="reg-bloodGroup"
+                      name="bloodGroup"
+                      className="input"
+                      value={form.bloodGroup}
+                      onChange={handleChange}
+                    >
+                      {BLOOD_GROUPS.map((bg) => (
+                        <option key={bg} value={bg}>{bg}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* API error */}

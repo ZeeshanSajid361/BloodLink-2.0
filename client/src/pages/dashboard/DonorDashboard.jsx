@@ -1,0 +1,780 @@
+/**
+ * Donor Dashboard.
+ *
+ * Shows the donor's complete profile in three tab views:
+ *   Overview   — eligibility card, stats, recognition level, availability toggle
+ *   Edit profile — form to update name, city, blood group, bio, etc.
+ *   History    — placeholder for donation history (Phase 7)
+ *
+ * Data comes from the useDonorProfile hook (GET /api/donors/me).
+ * Mutations call the API directly and then call refetch() to keep the UI
+ * in sync without needing a state management library.
+ */
+
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  LayoutDashboard, User, History, LogOut,
+  Droplets, MapPin, Phone, Calendar, AlertCircle,
+  CheckCircle2, Clock, Edit3, Save, X,
+} from 'lucide-react';
+import toast from 'react-hot-toast';
+
+import { useAuth }          from '../../context/AuthContext';
+import { useDonorProfile }  from '../../hooks/useDonorProfile';
+import api                  from '../../lib/api';
+import '../../styles/dashboard.css';
+
+// ── Blood groups for the edit form select ─────────────────────────────────
+const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+
+// ── Sidebar navigation items ──────────────────────────────────────────────
+const NAV_ITEMS = [
+  { id: 'overview', label: 'Overview',     icon: LayoutDashboard },
+  { id: 'edit',     label: 'Edit Profile', icon: Edit3 },
+  { id: 'history',  label: 'History',      icon: History },
+];
+
+export default function DonorDashboard() {
+  const { user, logout }       = useAuth();
+  const { donor, loading, error, refetch } = useDonorProfile();
+  const navigate               = useNavigate();
+  const [activeTab, setActiveTab] = useState('overview');
+
+  async function handleLogout() {
+    await logout();
+    navigate('/login', { replace: true });
+  }
+
+  // ── Sidebar ───────────────────────────────────────────────────────────────
+  const initials = user?.name
+    ?.split(' ')
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2) || '?';
+
+  return (
+    <div className="dashboard-shell">
+      {/* ── Sidebar ── */}
+      <aside className="sidebar">
+        <a href="/" className="sidebar-logo">
+          <div className="sidebar-logo-icon">🩸</div>
+          <span className="sidebar-logo-text">Blood<span>Link</span></span>
+        </a>
+
+        <div className="sidebar-user">
+          <div className="sidebar-user-card">
+            <div className="sidebar-avatar">{initials}</div>
+            <div className="sidebar-user-info">
+              <div className="sidebar-user-name">{user?.name}</div>
+              <div className="sidebar-user-role">Donor</div>
+            </div>
+          </div>
+        </div>
+
+        <nav className="sidebar-nav">
+          <div className="sidebar-nav-label">Navigation</div>
+          {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              id={`nav-${id}`}
+              className={`sidebar-nav-link${activeTab === id ? ' active' : ''}`}
+              onClick={() => setActiveTab(id)}
+            >
+              <Icon size={18} />
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-footer">
+          <button id="donor-logout" className="sidebar-nav-link" onClick={handleLogout}>
+            <LogOut size={18} />
+            Sign out
+          </button>
+        </div>
+      </aside>
+
+      {/* ── Main content ── */}
+      <main className="dashboard-main">
+        {loading && <DashboardSkeleton />}
+        {error   && <ErrorBanner message={error} onRetry={refetch} />}
+
+        {!loading && !error && donor && (
+          <>
+            {activeTab === 'overview' && (
+              <OverviewTab donor={donor} refetch={refetch} />
+            )}
+            {activeTab === 'edit' && (
+              <EditProfileTab donor={donor} refetch={refetch} onSaved={() => setActiveTab('overview')} />
+            )}
+            {activeTab === 'history' && (
+              <HistoryTab confirmedDonations={donor.confirmedDonations} />
+            )}
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  OVERVIEW TAB
+// ═══════════════════════════════════════════════════════════════════════════
+function OverviewTab({ donor, refetch }) {
+  return (
+    <>
+      {/* Page header */}
+      <div className="dashboard-topbar animate-fade-up">
+        <div>
+          <h1 className="dashboard-page-title">
+            Good {getTimeGreeting()},{' '}
+            {donor.name.split(' ')[0]} 👋
+          </h1>
+          <p className="dashboard-page-subtitle">
+            Here is your donation overview for today.
+          </p>
+        </div>
+
+        {/* Blood group badge */}
+        <div className="blood-group-badge" title="Your blood group">
+          {donor.bloodGroup}
+        </div>
+      </div>
+
+      {/* ── Row 1: Stats ── */}
+      <div className="dashboard-grid-3" style={{ marginBottom: 'var(--space-5)' }}>
+        <StatCard
+          label="Confirmed Donations"
+          value={donor.confirmedDonations}
+          sub="All-time verified"
+          icon="🩸"
+          iconBg="rgba(192,57,43,0.15)"
+        />
+        <StatCard
+          label="Blood Group"
+          value={donor.bloodGroup}
+          sub={donor.gender === 'male' ? '90-day cooldown' : '120-day cooldown'}
+          icon="💉"
+          iconBg="rgba(21,101,192,0.15)"
+        />
+        <StatCard
+          label="Member Since"
+          value={formatDate(donor.memberSince)}
+          sub={`${daysSince(donor.memberSince)} days on BloodLink`}
+          icon="📅"
+          iconBg="rgba(124,58,237,0.15)"
+        />
+      </div>
+
+      {/* ── Row 2: Eligibility + Availability ── */}
+      <div className="dashboard-grid-2" style={{ marginBottom: 'var(--space-5)' }}>
+        <EligibilityCard eligibility={donor.eligibility} />
+        <AvailabilityCard
+          isAvailable={donor.isAvailable}
+          eligible={donor.eligibility.eligible}
+          onToggle={async (val) => {
+            try {
+              await api.patch('/donors/me/availability', { isAvailable: val });
+              toast.success(val ? 'You are now available.' : 'Marked as unavailable.');
+              refetch();
+            } catch (err) {
+              toast.error(err.response?.data?.message || 'Failed to update availability.');
+            }
+          }}
+        />
+      </div>
+
+      {/* ── Row 3: Recognition level ── */}
+      <LevelCard level={donor.level} confirmedDonations={donor.confirmedDonations} allLevels={donor.allLevels} />
+
+      {/* ── Row 4: Quick info ── */}
+      <QuickInfoCard donor={donor} />
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ELIGIBILITY CARD
+// ═══════════════════════════════════════════════════════════════════════════
+function EligibilityCard({ eligibility }) {
+  const { eligible, nextEligibleDate, daysUntilEligible } = eligibility;
+
+  return (
+    <div className={`eligibility-card ${eligible ? 'eligible' : 'ineligible'}`}>
+      <div className="eligibility-card-glow" />
+
+      <div className="eligibility-status-row">
+        <div className="eligibility-icon">
+          {eligible ? '✅' : '⏳'}
+        </div>
+        <div>
+          <div className="eligibility-title">
+            {eligible ? 'Eligible to Donate' : 'Cooldown Period'}
+          </div>
+          <div className="eligibility-detail">
+            {eligible
+              ? 'You are cleared to donate blood right now.'
+              : `Next eligible on ${formatDate(nextEligibleDate)}`}
+          </div>
+        </div>
+      </div>
+
+      {!eligible && daysUntilEligible > 0 && (
+        <div className="eligibility-countdown">
+          <CountdownBox value={Math.floor(daysUntilEligible / 7)} label="Weeks" />
+          <CountdownBox value={daysUntilEligible % 7}            label="Days" />
+          <CountdownBox value={daysUntilEligible}                label="Total days" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CountdownBox({ value, label }) {
+  return (
+    <div className="countdown-box">
+      <span className="countdown-value">{value}</span>
+      <span className="countdown-label">{label}</span>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  AVAILABILITY CARD
+// ═══════════════════════════════════════════════════════════════════════════
+function AvailabilityCard({ isAvailable, eligible, onToggle }) {
+  const [pending, setPending] = useState(false);
+
+  async function handleChange(e) {
+    if (pending) return;
+    const val = e.target.checked;
+    setPending(true);
+    await onToggle(val);
+    setPending(false);
+  }
+
+  return (
+    <div className="availability-card">
+      <div className="availability-info">
+        <h4>Availability Status</h4>
+        <p>
+          {isAvailable
+            ? eligible
+              ? 'You are visible to seekers and can receive requests.'
+              : 'Available, but currently in the cooldown period.'
+            : 'You are hidden from search results and alerts.'}
+        </p>
+        {!eligible && isAvailable && (
+          <span
+            className="badge badge-amber"
+            style={{ marginTop: 'var(--space-3)', display: 'inline-flex' }}
+          >
+            ⚠ On cooldown
+          </span>
+        )}
+        {eligible && isAvailable && (
+          <span
+            className="badge badge-green"
+            style={{ marginTop: 'var(--space-3)', display: 'inline-flex' }}
+          >
+            ✓ Active in search
+          </span>
+        )}
+      </div>
+
+      <label className="toggle-switch" aria-label="Toggle availability">
+        <input
+          id="availability-toggle"
+          type="checkbox"
+          checked={isAvailable}
+          onChange={handleChange}
+          disabled={pending}
+        />
+        <span className="toggle-track" />
+      </label>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  RECOGNITION LEVEL CARD
+// ═══════════════════════════════════════════════════════════════════════════
+function LevelCard({ level, confirmedDonations, allLevels }) {
+  if (!level) {
+    return (
+      <div className="level-card" style={{ marginBottom: 'var(--space-5)' }}>
+        <div className="level-header">
+          <div
+            className="level-icon-wrap"
+            style={{ background: 'rgba(255,255,255,0.06)' }}
+          >
+            🌱
+          </div>
+          <div>
+            <div className="level-name" style={{ color: 'var(--text-secondary)' }}>
+              No level yet
+            </div>
+            <div className="level-desc">
+              Complete your first confirmed donation to earn your first recognition badge.
+            </div>
+          </div>
+        </div>
+
+        <div className="level-progress-wrap">
+          <div className="level-progress-label">
+            <span>Progress to Spark</span>
+            <span>0 / 1 donation</span>
+          </div>
+          <div className="level-progress-track">
+            <div className="level-progress-fill" style={{ width: '0%', background: '#f59e0b' }} />
+          </div>
+        </div>
+
+        <LevelTiers allLevels={allLevels} />
+      </div>
+    );
+  }
+
+  const progress = level.progress * 100;
+
+  return (
+    <div className="level-card" style={{ marginBottom: 'var(--space-5)' }}>
+      <div className="level-header">
+        <div
+          className="level-icon-wrap"
+          style={{ background: `${level.color}22` }}
+        >
+          {level.icon}
+        </div>
+        <div>
+          <div className="level-name" style={{ color: level.color }}>
+            {level.label}
+          </div>
+          <div className="level-desc">{level.description}</div>
+        </div>
+        <span
+          className="badge"
+          style={{
+            marginLeft: 'auto',
+            background: `${level.color}22`,
+            color: level.color,
+          }}
+        >
+          {confirmedDonations} donation{confirmedDonations !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {level.nextLevel && (
+        <div className="level-progress-wrap">
+          <div className="level-progress-label">
+            <span>
+              Progress to {level.nextLevel.icon} {level.nextLevel.label}
+            </span>
+            <span>
+              {level.donationsToNextLevel} more donation{level.donationsToNextLevel !== 1 ? 's' : ''} needed
+            </span>
+          </div>
+          <div className="level-progress-track">
+            <div
+              className="level-progress-fill"
+              style={{ width: `${progress}%`, background: level.color }}
+            />
+          </div>
+        </div>
+      )}
+
+      {!level.nextLevel && (
+        <div
+          className="badge badge-blue"
+          style={{ display: 'inline-flex', marginBottom: 'var(--space-4)' }}
+        >
+          ⚓ Maximum level achieved
+        </div>
+      )}
+
+      <LevelTiers allLevels={allLevels} />
+    </div>
+  );
+}
+
+function LevelTiers({ allLevels }) {
+  return (
+    <div className="level-tiers">
+      {allLevels.map((l) => (
+        <div
+          key={l.id}
+          className={`level-tier-pip ${l.unlocked ? 'unlocked' : 'locked'}`}
+          title={`${l.label} — ${l.minDonations}+ donations`}
+        >
+          <span>{l.icon}</span>
+          <span>{l.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  QUICK INFO CARD
+// ═══════════════════════════════════════════════════════════════════════════
+function QuickInfoCard({ donor }) {
+  return (
+    <div className="card" style={{ marginTop: 'var(--space-5)' }}>
+      <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: 'var(--space-5)' }}>
+        Profile Summary
+      </h3>
+      <div className="dashboard-grid-2">
+        <InfoRow icon={<User size={15} />}      label="Full Name"    value={donor.name} />
+        <InfoRow icon={<Droplets size={15} />}  label="Blood Group"  value={donor.bloodGroup} />
+        <InfoRow icon={<MapPin size={15} />}    label="City"         value={donor.city || '—'} />
+        <InfoRow icon={<Phone size={15} />}     label="Phone"        value={donor.phone || '—'} />
+        <InfoRow icon={<Calendar size={15} />}  label="Last Donation"
+          value={donor.lastDonationDate ? formatDate(donor.lastDonationDate) : 'Never donated'} />
+        <InfoRow icon={<User size={15} />}      label="Age / Gender"
+          value={`${donor.age} yrs · ${capitalise(donor.gender)}`} />
+      </div>
+      {donor.bio && (
+        <div style={{
+          marginTop: 'var(--space-5)',
+          padding: 'var(--space-4)',
+          background: 'var(--surface-float)',
+          borderRadius: 'var(--radius-md)',
+          fontSize: '0.9rem',
+          color: 'var(--text-secondary)',
+          fontStyle: 'italic',
+        }}>
+          &ldquo;{donor.bio}&rdquo;
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InfoRow({ icon, label, value }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-3)' }}>
+      <span style={{ color: 'var(--text-muted)', marginTop: 2 }}>{icon}</span>
+      <div>
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 2 }}>{label}</div>
+        <div style={{ fontSize: '0.9375rem', color: 'var(--text-primary)', fontWeight: 500 }}>{value}</div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  EDIT PROFILE TAB
+// ═══════════════════════════════════════════════════════════════════════════
+function EditProfileTab({ donor, refetch, onSaved }) {
+  const [form, setForm] = useState({
+    name:        donor.name        || '',
+    phone:       donor.phone       || '',
+    city:        donor.city        || '',
+    age:         donor.age         || '',
+    gender:      donor.gender      || 'male',
+    bloodGroup:  donor.bloodGroup  || 'O+',
+    bio:         donor.bio         || '',
+  });
+  const [saving,   setSaving]   = useState(false);
+  const [apiError, setApiError] = useState('');
+
+  function handleChange(e) {
+    const { name, value } = e.target;
+    setForm((p) => ({ ...p, [name]: value }));
+    setApiError('');
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setSaving(true);
+    setApiError('');
+
+    try {
+      await api.put('/donors/me', {
+        name:       form.name.trim(),
+        phone:      form.phone.trim() || undefined,
+        city:       form.city.trim()  || undefined,
+        age:        Number(form.age),
+        gender:     form.gender,
+        bloodGroup: form.bloodGroup,
+        bio:        form.bio.trim()   || undefined,
+      });
+      await refetch();
+      toast.success('Profile updated successfully.');
+      onSaved();
+    } catch (err) {
+      setApiError(err.response?.data?.message || 'Failed to update profile.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="dashboard-topbar animate-fade-up">
+        <div>
+          <h1 className="dashboard-page-title">Edit Profile</h1>
+          <p className="dashboard-page-subtitle">Update your information below.</p>
+        </div>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={onSaved}
+        >
+          <X size={16} /> Cancel
+        </button>
+      </div>
+
+      <div className="profile-form-card animate-fade-up">
+        <form onSubmit={handleSubmit} noValidate>
+          <div className="profile-form-grid">
+
+            {/* Name */}
+            <div className="input-group">
+              <label className="input-label" htmlFor="edit-name">
+                Full name <span className="required">*</span>
+              </label>
+              <input
+                id="edit-name"
+                name="name"
+                className="input"
+                value={form.name}
+                onChange={handleChange}
+                required
+              />
+            </div>
+
+            {/* Phone */}
+            <div className="input-group">
+              <label className="input-label" htmlFor="edit-phone">Phone</label>
+              <input
+                id="edit-phone"
+                name="phone"
+                className="input"
+                placeholder="+92 300 0000000"
+                value={form.phone}
+                onChange={handleChange}
+              />
+            </div>
+
+            {/* City */}
+            <div className="input-group">
+              <label className="input-label" htmlFor="edit-city">City</label>
+              <input
+                id="edit-city"
+                name="city"
+                className="input"
+                placeholder="Islamabad"
+                value={form.city}
+                onChange={handleChange}
+              />
+            </div>
+
+            {/* Age */}
+            <div className="input-group">
+              <label className="input-label" htmlFor="edit-age">
+                Age <span className="required">*</span>
+              </label>
+              <input
+                id="edit-age"
+                name="age"
+                type="number"
+                className="input"
+                min={18}
+                max={65}
+                value={form.age}
+                onChange={handleChange}
+                required
+              />
+            </div>
+
+            {/* Gender */}
+            <div className="input-group">
+              <label className="input-label" htmlFor="edit-gender">
+                Gender <span className="required">*</span>
+              </label>
+              <select
+                id="edit-gender"
+                name="gender"
+                className="input"
+                value={form.gender}
+                onChange={handleChange}
+              >
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+
+            {/* Blood group */}
+            <div className="input-group">
+              <label className="input-label" htmlFor="edit-bloodGroup">
+                Blood group <span className="required">*</span>
+              </label>
+              <select
+                id="edit-bloodGroup"
+                name="bloodGroup"
+                className="input"
+                value={form.bloodGroup}
+                onChange={handleChange}
+              >
+                {BLOOD_GROUPS.map((bg) => (
+                  <option key={bg} value={bg}>{bg}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Bio */}
+            <div className="input-group full">
+              <label className="input-label" htmlFor="edit-bio">
+                Bio <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional, max 300 chars)</span>
+              </label>
+              <textarea
+                id="edit-bio"
+                name="bio"
+                className="input"
+                rows={3}
+                maxLength={300}
+                placeholder="A short note about yourself..."
+                value={form.bio}
+                onChange={handleChange}
+                style={{ resize: 'vertical', minHeight: 80 }}
+              />
+            </div>
+          </div>
+
+          {apiError && (
+            <div className="flex items-center gap-2 mt-4"
+              style={{ color: 'var(--red-400)', fontSize: '0.875rem' }}>
+              <AlertCircle size={16} />{apiError}
+            </div>
+          )}
+
+          <div className="flex gap-4 mt-6">
+            <button
+              id="edit-save"
+              type="submit"
+              className="btn btn-primary"
+              disabled={saving}
+            >
+              {saving ? <span className="spinner" /> : <Save size={16} />}
+              Save changes
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={onSaved}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  HISTORY TAB  (Phase 7 placeholder)
+// ═══════════════════════════════════════════════════════════════════════════
+function HistoryTab({ confirmedDonations }) {
+  return (
+    <>
+      <div className="dashboard-topbar animate-fade-up">
+        <div>
+          <h1 className="dashboard-page-title">Donation History</h1>
+          <p className="dashboard-page-subtitle">Your confirmed donation record.</p>
+        </div>
+      </div>
+
+      <div className="card animate-fade-up" style={{ textAlign: 'center', padding: 'var(--space-12)' }}>
+        <div style={{ fontSize: '3.5rem', marginBottom: 'var(--space-5)' }}>🩺</div>
+        <h3>Confirmed donations: {confirmedDonations}</h3>
+        <p className="mt-4" style={{ maxWidth: 380, margin: 'var(--space-4) auto 0' }}>
+          Per-donation records with QR check-in confirmation will be available
+          after Phase 7 is implemented.
+        </p>
+      </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SHARED UI — stat card, skeleton, error banner
+// ═══════════════════════════════════════════════════════════════════════════
+function StatCard({ label, value, sub, icon, iconBg }) {
+  return (
+    <div className="stat-card">
+      <div className="stat-card-header">
+        <span className="stat-card-label">{label}</span>
+        <div className="stat-card-icon" style={{ background: iconBg }}>
+          <span style={{ fontSize: '1.1rem' }}>{icon}</span>
+        </div>
+      </div>
+      <div className="stat-card-value">{value}</div>
+      <div className="stat-card-sub">{sub}</div>
+    </div>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="animate-fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
+      <div className="skeleton" style={{ height: 40, width: 280, borderRadius: 8 }} />
+      <div className="dashboard-grid-3">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="skeleton" style={{ height: 110, borderRadius: 16 }} />
+        ))}
+      </div>
+      <div className="dashboard-grid-2">
+        <div className="skeleton" style={{ height: 160, borderRadius: 16 }} />
+        <div className="skeleton" style={{ height: 160, borderRadius: 16 }} />
+      </div>
+      <div className="skeleton" style={{ height: 180, borderRadius: 16 }} />
+    </div>
+  );
+}
+
+function ErrorBanner({ message, onRetry }) {
+  return (
+    <div
+      className="animate-fade-up"
+      style={{
+        padding: 'var(--space-5) var(--space-6)',
+        background: 'rgba(192,57,43,0.08)',
+        border: '1px solid rgba(192,57,43,0.2)',
+        borderRadius: 'var(--radius-lg)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 'var(--space-4)',
+      }}
+    >
+      <AlertCircle size={20} style={{ color: 'var(--red-400)', flexShrink: 0 }} />
+      <span style={{ color: 'var(--red-300)', flex: 1 }}>{message}</span>
+      <button className="btn btn-ghost btn-sm" onClick={onRetry}>Retry</button>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  UTILITY FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+function getTimeGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'morning';
+  if (h < 17) return 'afternoon';
+  return 'evening';
+}
+
+function formatDate(date) {
+  if (!date) return '—';
+  return new Intl.DateTimeFormat('en-PK', {
+    year: 'numeric', month: 'short', day: 'numeric',
+  }).format(new Date(date));
+}
+
+function daysSince(date) {
+  const ms = Date.now() - new Date(date).getTime();
+  return Math.floor(ms / (1000 * 60 * 60 * 24));
+}
+
+function capitalise(str) {
+  return str ? str.charAt(0).toUpperCase() + str.slice(1) : '';
+}

@@ -8,9 +8,11 @@
 'use strict';
 
 const express = require('express');
-const crypto = require('crypto');
+const crypto  = require('crypto');
+const mongoose = require('mongoose');
 
-const { User, ROLES } = require('../../models/User');
+const { User, ROLES }         = require('../../models/User');
+const { DonorProfile }        = require('../../models/DonorProfile');
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../../utils/token');
 const { sendVerificationEmail, sendWelcomeEmail } = require('../../utils/email');
 
@@ -23,13 +25,25 @@ const router = express.Router();
  * Creates a new user account and dispatches a verification email.
  * The account is inactive (isEmailVerified: false) until the link is clicked.
  *
- * Body: { name, email, password, role, phone?, city? }
+ * When role === 'donor', donor-specific fields (age, gender, bloodGroup,
+ * lastDonationDate) are also accepted and stored in a DonorProfile document
+ * created atomically in the same MongoDB session.
+ *
+ * Body: { name, email, password, role, phone?, city?,
+ *         age?, gender?, bloodGroup?, lastDonationDate? }
  */
 router.post('/register', async (req, res, next) => {
-  try {
-    const { name, email, password, role, phone, city } = req.body;
+  const session = await mongoose.startSession();
 
-    // Basic presence check before touching the DB.
+  try {
+    const {
+      name, email, password, role,
+      phone, city,
+      // Donor-specific fields (ignored for non-donor roles)
+      age, gender, bloodGroup, lastDonationDate,
+    } = req.body;
+
+    // Presence check before touching the DB.
     if (!name || !email || !password || !role) {
       return res.status(400).json({
         success: false,
@@ -44,7 +58,6 @@ router.post('/register', async (req, res, next) => {
       });
     }
 
-    // Prevent self-registration as admin — admins are seeded directly.
     if (role === 'admin') {
       return res.status(403).json({
         success: false,
@@ -52,11 +65,39 @@ router.post('/register', async (req, res, next) => {
       });
     }
 
-    const user = new User({ name, email, password, role, phone, city });
-    const rawToken = user.generateEmailVerificationToken();
-    await user.save();
+    // Validate donor-required fields before starting the transaction.
+    if (role === 'donor') {
+      if (!age || !gender || !bloodGroup) {
+        return res.status(400).json({
+          success: false,
+          message: 'Donor registration requires age, gender, and bloodGroup.',
+        });
+      }
+    }
 
-    // Fire-and-forget email; don't block the response on SMTP latency.
+    let userId;
+    let rawToken;
+
+    await session.withTransaction(async () => {
+      const user = new User({ name, email, password, role, phone, city });
+      rawToken = user.generateEmailVerificationToken();
+      await user.save({ session });
+      userId = user._id;
+
+      if (role === 'donor') {
+        const profile = new DonorProfile({
+          user:             userId,
+          age:              Number(age),
+          gender,
+          bloodGroup,
+          lastDonationDate: lastDonationDate ? new Date(lastDonationDate) : null,
+        });
+        await profile.save({ session });
+      }
+    });
+
+    // Fire-and-forget — don't block the response on SMTP latency.
+    const user = await User.findById(userId);
     sendVerificationEmail({ name: user.name, email: user.email, token: rawToken }).catch((err) =>
       console.error('[email] Verification send failed:', err.message)
     );
@@ -64,10 +105,12 @@ router.post('/register', async (req, res, next) => {
     return res.status(201).json({
       success: true,
       message: 'Account created. Please check your email to verify your address.',
-      data: { userId: user._id, role: user.role },
+      data: { userId, role },
     });
   } catch (err) {
     next(err);
+  } finally {
+    session.endSession();
   }
 });
 
